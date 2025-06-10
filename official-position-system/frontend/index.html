@@ -1,0 +1,642 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>官职查询系统</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.1/css/all.min.css">
+    <style>
+        .position-card {
+            margin: 10px;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .position-card.green {
+            border-left: 5px solid #28a745;
+        }
+        .position-card.yellow {
+            border-left: 5px solid #ffc107;
+        }
+        .position-card.red {
+            border-left: 5px solid #dc3545;
+        }
+        .tree-container {
+            margin-left: 20px;
+            border-left: 1px dashed #ccc;
+            padding-left: 20px;
+        }
+        .connection-arrow {
+            position: absolute;
+            z-index: -1;
+            stroke: #000;
+            stroke-width: 2;
+            fill: none;
+        }
+        .connection-label {
+            position: absolute;
+            background: white;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .date-selector {
+            margin-bottom: 20px;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .source-link {
+            font-size: 12px;
+            color: #6c757d;
+            cursor: pointer;
+        }
+        .source-link:hover {
+            color: #0d6efd;
+        }
+        .official-badge {
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <h1 class="my-4">官职查询系统</h1>
+        
+        <!-- 日期选择器 -->
+        <div class="date-selector">
+            <div class="row">
+                <div class="col-md-4">
+                    <input type="date" id="datePicker" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <select id="dateType" class="form-select">
+                        <option value="gregorian">公历</option>
+                        <option value="lunar">农历</option>
+                        <option value="ganzhi">干支</option>
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <div id="dateDisplay" class="form-control-plaintext"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 主内容区 -->
+        <div class="row">
+            <div class="col-md-9">
+                <div id="positionsTree" class="tree-container"></div>
+                <svg id="connectionsCanvas" style="width:100%; height:100%; position:absolute; top:0; left:0; pointer-events:none;"></svg>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">添加新内容</h5>
+                    </div>
+                    <div class="card-body">
+                        <button id="addPositionBtn" class="btn btn-primary btn-sm mb-2">添加职位</button>
+                        <button id="addConnectionBtn" class="btn btn-secondary btn-sm mb-2">添加关系箭头</button>
+                        <div id="editPanel"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 模态框 -->
+    <div class="modal fade" id="editModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">编辑</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="modalBody">
+                    <!-- 动态内容 -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="modalSaveBtn">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
+    <script>
+        // 全局变量
+        let currentDate = new Date();
+        let positions = [];
+        let connections = [];
+        let officials = [];
+        const backendUrl = 'http://127.0.0.1:5000'; // 后端API的基础URL
+        
+        // 初始化
+        $(document).ready(function() {
+            // 设置默认日期为今天
+            const today = new Date();
+            const dateStr = today.toISOString().split('T')[0];
+            $('#datePicker').val(dateStr);
+            updateDateDisplay(dateStr);
+            
+            // 加载数据
+            loadData(dateStr);
+            
+            // 日期选择器事件
+            $('#datePicker').change(function() {
+                const dateStr = $(this).val();
+                updateDateDisplay(dateStr);
+                loadData(dateStr);
+            });
+            
+            // 日期类型切换
+            $('#dateType').change(function() {
+                updateDateDisplay($('#datePicker').val());
+            });
+            
+            // 添加职位按钮
+            $('#addPositionBtn').click(function() {
+                showPositionForm();
+            });
+            
+            // 添加关系箭头按钮
+            $('#addConnectionBtn').click(function() {
+                showConnectionForm();
+            });
+        });
+    
+        // 更新日期显示
+        function updateDateDisplay(dateStr) {
+            const dateType = $('#dateType').val();
+            
+            if (dateType === 'gregorian') {
+                $('#dateDisplay').text(formatGregorianDate(dateStr));
+            } else {
+                // 调用API获取转换后的日期
+                $.get(`${backendUrl}/api/date-convert?date=${dateStr}`, function(data) {
+                    if (dateType === 'lunar') {
+                        $('#dateDisplay').text(data.lunar);
+                    } else {
+                        $('#dateDisplay').text(data.ganzhi);
+                    }
+                });
+            }
+        }
+        
+        // 格式化公历日期
+        function formatGregorianDate(dateStr) {
+            const date = new Date(dateStr);
+            return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+        }
+        
+        // 加载数据
+        function loadData(dateStr) {
+            // 加载职位树
+            $.get(`${backendUrl}/api/positions?date=${dateStr}`, function(data) {
+                positions = data;
+                renderPositionTree();
+                
+                // 加载连接关系
+                $.get(`${backendUrl}/api/connections?date=${dateStr}`, function(connData) {
+                    connections = connData;
+                    renderConnections();
+                });
+            });
+        }
+        
+        // 渲染职位树
+        function renderPositionTree() {
+            const $treeContainer = $('#positionsTree').empty();
+            
+            // 先找出顶级职位
+            const topLevelPositions = positions.filter(pos => !pos.parent_id);
+            
+            // 递归渲染每个职位及其子职位
+            topLevelPositions.forEach(pos => {
+                renderPosition(pos, $treeContainer, 0);
+            });
+        }
+        
+        // 递归渲染单个职位
+        function renderPosition(position, $parent, level) {
+            // 确定状态颜色
+            const statusClass = getPositionStatusClass(position, currentDate);
+            
+            // 创建职位卡片
+            const $card = $(`
+                <div class="position-card ${statusClass}" data-id="${position.id}">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <span class="toggle-children" style="cursor:pointer; margin-right:10px;">
+                                <i class="fas fa-caret-right"></i>
+                            </span>
+                            ${position.name}
+                        </h5>
+                        <div>
+                            <button class="btn btn-sm btn-outline-primary edit-position-btn">编辑</button>
+                        </div>
+                    </div>
+                    <div class="position-function mt-2">
+                        ${position.function ? position.function.description : '暂无职能描述'}
+                        ${position.function ? `<div class="source-link" data-source="${position.function.source_reference}" data-text="${position.function.source_text}">[出处]</div>` : ''}
+                    </div>
+                    <div class="officials mt-2">
+                        ${position.appointments.map(app => `
+                            <span class="badge bg-info official-badge official-link" data-id="${app.official_id}">
+                                ${getOfficialName(app.official_id)}
+                                <span class="source-link" data-source="${app.source_reference}" data-text="${app.source_text}">[出处]</span>
+                            </span>
+                        `).join('')}
+                    </div>
+                    <div class="children-container tree-container" style="display:none;"></div>
+                </div>
+            `).appendTo($parent);
+            
+            // 查找子职位
+            const children = positions.filter(pos => pos.parent_id === position.id);
+            
+            // 如果有子职位，添加点击展开/折叠事件
+            if (children.length > 0) {
+                $card.find('.toggle-children').click(function() {
+                    const $icon = $(this).find('i');
+                    const $childrenContainer = $card.find('.children-container');
+                    
+                    if ($icon.hasClass('fa-caret-right')) {
+                        $icon.removeClass('fa-caret-right').addClass('fa-caret-down');
+                        $childrenContainer.slideDown();
+                        
+                        // 如果子容器为空，渲染子职位
+                        if ($childrenContainer.children().length === 0) {
+                            children.forEach(child => {
+                                renderPosition(child, $childrenContainer, level + 1);
+                            });
+                        }
+                    } else {
+                        $icon.removeClass('fa-caret-down').addClass('fa-caret-right');
+                        $childrenContainer.slideUp();
+                    }
+                });
+            } else {
+                $card.find('.toggle-children i').removeClass('fa-caret-right').addClass('fa-minus');
+            }
+            
+            // 编辑按钮事件
+            $card.find('.edit-position-btn').click(function() {
+                showPositionForm(position.id);
+            });
+            
+            // 官员链接事件
+            $card.find('.official-link').click(function() {
+                const officialId = $(this).data('id');
+                showOfficialDetail(officialId);
+            });
+            
+            // 出处链接事件
+            $card.find('.source-link').click(function(e) {
+                e.stopPropagation();
+                const sourceRef = $(this).data('source');
+                const sourceText = $(this).data('text');
+                showSourceDetail(sourceText, sourceRef);
+            });
+        }
+        
+        // 获取职位状态类
+        function getPositionStatusClass(position, date) {
+            // 简化的逻辑，实际应根据编辑日期判断
+            if (position.function && position.function.date === date) {
+                return 'green';
+            } else if (position.function) {
+                return 'yellow';
+            } else {
+                return 'red';
+            }
+        }
+        
+        // 获取官员姓名
+        function getOfficialName(officialId) {
+            // 在实际应用中应从API获取或从全局officials数组中查找
+            return `官员${officialId}`;
+        }
+        
+        // 渲染连接关系
+        function renderConnections() {
+            const $canvas = $('#connectionsCanvas').empty();
+            
+            connections.forEach(conn => {
+                if (!conn.is_visible) return;
+                
+                const $fromPos = $(`.position-card[data-id="${conn.from_position_id}"]`);
+                const $toPos = $(`.position-card[data-id="${conn.to_position_id}"]`);
+                
+                if ($fromPos.length && $toPos.length) {
+                    const fromRect = $fromPos[0].getBoundingClientRect();
+                    const toRect = $toPos[0].getBoundingClientRect();
+                    
+                    const fromX = fromRect.right;
+                    const fromY = fromRect.top + fromRect.height / 2;
+                    const toX = toRect.left;
+                    const toY = toRect.top + toRect.height / 2;
+                    
+                    // 计算控制点使曲线平滑
+                    const controlX1 = fromX + (toX - fromX) * 0.3;
+                    const controlX2 = fromX + (toX - fromX) * 0.7;
+                    
+                    // 创建箭头路径
+                    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    path.setAttribute("d", `M${fromX},${fromY} C${controlX1},${fromY} ${controlX2},${toY} ${toX},${toY}`);
+                    path.setAttribute("stroke", conn.color || '#000');
+                    path.setAttribute("stroke-width", "2");
+                    path.setAttribute("fill", "none");
+                    path.setAttribute("marker-end", "url(#arrowhead)");
+                    
+                    $canvas.append(path);
+                    
+                    // 添加标签
+                    if (conn.label) {
+                        const labelX = (fromX + toX) / 2;
+                        const labelY = (fromY + toY) / 2;
+                        
+                        const $label = $(`
+                            <div class="connection-label" style="left:${labelX}px; top:${labelY}px">
+                                ${conn.label}
+                            </div>
+                        `).appendTo('body');
+                    }
+                }
+            });
+            
+            // 添加箭头标记定义
+            if ($canvas.find('defs').length === 0) {
+                const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+                const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+                marker.setAttribute("id", "arrowhead");
+                marker.setAttribute("markerWidth", "10");
+                marker.setAttribute("markerHeight", "7");
+                marker.setAttribute("refX", "8");
+                marker.setAttribute("refY", "3.5");
+                marker.setAttribute("orient", "auto");
+                
+                const arrow = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                arrow.setAttribute("points", "0 0, 10 3.5, 0 7");
+                arrow.setAttribute("fill", "#000");
+                
+                marker.appendChild(arrow);
+                defs.appendChild(marker);
+                $canvas.prepend(defs);
+            }
+        }
+        
+        // 显示职位表单
+        function showPositionForm(positionId = null) {
+            const position = positionId ? positions.find(p => p.id === positionId) : null;
+            const dateStr = $('#datePicker').val();
+            
+            let modalContent = `
+                <div class="mb-3">
+                    <label class="form-label">职位名称</label>
+                    <input type="text" class="form-control" id="positionName" value="${position ? position.name : ''}">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">上级职位</label>
+                    <select class="form-select" id="positionParent">
+                        <option value="">无 (顶级职位)</option>
+                        ${positions.filter(p => !position || p.id !== position.id).map(p => `
+                            <option value="${p.id}" ${position && position.parent_id === p.id ? 'selected' : ''}>${p.name}</option>
+                        `).join('')}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">职能描述</label>
+                    <textarea class="form-control" id="positionFunction" rows="3">${position && position.function ? position.function.description : ''}</textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">史料原文</label>
+                    <textarea class="form-control" id="sourceText" rows="2">${position && position.function ? position.function.source_text : ''}</textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">史料出处</label>
+                    <input type="text" class="form-control" id="sourceReference" value="${position && position.function ? position.function.source_reference : ''}">
+                </div>
+                <input type="hidden" id="editDate" value="${dateStr}">
+            `;
+            
+            $('#modalTitle').text(positionId ? '编辑职位' : '添加新职位');
+            $('#modalBody').html(modalContent);
+            $('#modalSaveBtn').off('click').on('click', function() {
+                savePosition(positionId);
+            });
+            
+            new bootstrap.Modal(document.getElementById('editModal')).show();
+        }
+        
+        // 保存职位
+        function savePosition(positionId) {
+            const name = $('#positionName').val();
+            const parentId = $('#positionParent').val();
+            const data = {
+                name: name,
+                parent_id: parentId || null,
+                date: $('#editDate').val(),
+                function: {
+                    description: $('#positionFunction').val(),
+                    source_text: $('#sourceText').val(),
+                    source_reference: $('#sourceReference').val()
+                }
+            };
+            
+            const url = positionId ? `${backendUrl}/api/positions/${positionId}` : `${backendUrl}/api/positions`;
+            const method = positionId ? 'PUT' : 'POST';
+            
+            $.ajax({
+                url: url,
+                method: method,
+                contentType: 'application/json',
+                data: JSON.stringify(data),
+                success: function(response) {
+                    if (response.success) {
+                        location.reload(); // 简化处理，实际应优化为局部刷新
+                    }
+                }
+            });
+        }
+        
+        // 显示官员详情
+        function showOfficialDetail(officialId) {
+            $.get(`${backendUrl}/api/officials/${officialId}`, function(data) {
+                let modalContent = `
+                    <div class="mb-3">
+                        <label class="form-label">姓名</label>
+                        <input type="text" class="form-control" id="officialName" value="${data.official.name}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">生平信息</label>
+                        <textarea class="form-control" id="officialBio" rows="5">${data.official.bio || ''}</textarea>
+                    </div>
+                    <h5 class="mt-4">任职履历</h5>
+                    <ul class="list-group">
+                        ${data.appointments.map(app => `
+                            <li class="list-group-item">
+                                <strong>${getPositionName(app.position_id)}</strong><br>
+                                ${formatDate(app.start_date)} 至 ${app.end_date ? formatDate(app.end_date) : '至今'}<br>
+                                <span class="source-link" data-source="${app.source_reference}" data-text="${app.source_text}">[出处]</span>
+                            </li>
+                        `).join('')}
+                    </ul>
+                `;
+                
+                $('#modalTitle').text('官员信息');
+                $('#modalBody').html(modalContent);
+                $('#modalSaveBtn').off('click').on('click', function() {
+                    saveOfficial(officialId);
+                });
+                
+                // 出处链接事件
+                $('#modalBody').find('.source-link').click(function() {
+                    const sourceRef = $(this).data('source');
+                    const sourceText = $(this).data('text');
+                    showSourceDetail(sourceText, sourceRef);
+                });
+                
+                new bootstrap.Modal(document.getElementById('editModal')).show();
+            });
+        }
+        
+        // 保存官员信息
+        function saveOfficial(officialId) {
+            const data = {
+                name: $('#officialName').val(),
+                bio: $('#officialBio').val()
+            };
+            
+            $.ajax({
+                url: `${backendUrl}/api/officials/${officialId}`,
+                method: 'PUT',
+                contentType: 'application/json',
+                data: JSON.stringify(data),
+                success: function(response) {
+                    if (response.success) {
+                        location.reload(); // 简化处理，实际应优化为局部刷新
+                    }
+                }
+            });
+        }
+        
+        // 显示关系箭头表单
+        function showConnectionForm() {
+            const dateStr = $('#datePicker').val();
+            
+            let modalContent = `
+                <div class="mb-3">
+                    <label class="form-label">起始职位</label>
+                    <select class="form-select" id="connectionFrom">
+                        ${positions.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">目标职位</label>
+                    <select class="form-select" id="connectionTo">
+                        ${positions.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">标签文字</label>
+                    <input type="text" class="form-control" id="connectionLabel">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">箭头颜色</label>
+                    <input type="color" class="form-control form-control-color" id="connectionColor" value="#000000">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">箭头样式</label>
+                    <select class="form-select" id="connectionStyle">
+                        <option value="solid">实线</option>
+                        <option value="dashed">虚线</option>
+                        <option value="dotted">点线</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">史料原文</label>
+                    <textarea class="form-control" id="connectionSourceText" rows="2"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">史料出处</label>
+                    <input type="text" class="form-control" id="connectionSourceReference">
+                </div>
+                <input type="hidden" id="connectionDate" value="${dateStr}">
+            `;
+            
+            $('#modalTitle').text('添加关系箭头');
+            $('#modalBody').html(modalContent);
+            $('#modalSaveBtn').off('click').on('click', function() {
+                saveConnection();
+            });
+            
+            new bootstrap.Modal(document.getElementById('editModal')).show();
+        }
+        
+        // 保存关系箭头
+        function saveConnection() {
+            const data = {
+                from_position_id: $('#connectionFrom').val(),
+                to_position_id: $('#connectionTo').val(),
+                date: $('#connectionDate').val(),
+                label: $('#connectionLabel').val(),
+                color: $('#connectionColor').val(),
+                style: $('#connectionStyle').val(),
+                source_text: $('#connectionSourceText').val(),
+                source_reference: $('#connectionSourceReference').val()
+            };
+            
+            $.ajax({
+                url: `${backendUrl}/api/connections`,
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(data),
+                success: function(response) {
+                    if (response.success) {
+                        location.reload(); // 简化处理，实际应优化为局部刷新
+                    }
+                }
+            });
+        }
+        
+        // 显示出处详情
+        function showSourceDetail(text, reference) {
+            let modalContent = `
+                <div class="mb-3">
+                    <label class="form-label">史料原文</label>
+                    <textarea class="form-control" rows="3" readonly>${text || '无'}</textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">史料出处</label>
+                    <input type="text" class="form-control" value="${reference || '无'}" readonly>
+                </div>
+            `;
+            
+            $('#modalTitle').text('史料出处');
+            $('#modalBody').html(modalContent);
+            $('#modalSaveBtn').hide();
+            
+            new bootstrap.Modal(document.getElementById('editModal')).show();
+        }
+        
+        // 辅助函数：获取职位名称
+        function getPositionName(positionId) {
+            const position = positions.find(p => p.id === positionId);
+            return position ? position.name : '未知职位';
+        }
+        
+        // 辅助函数：格式化日期
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+        }
+    </script>
+</body>
+</html>
